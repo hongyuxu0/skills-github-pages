@@ -1,0 +1,685 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>交互式KD树可视化</title>
+    <style>
+        .container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 15px;
+            font-family: "微软雅黑", Arial, sans-serif;
+            padding: 20px;
+        }
+        .controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            justify-content: center;
+            width: 100%;
+            max-width: 900px;
+        }
+        .input-group {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        input {
+            width: 70px;
+            padding: 6px;
+            font-family: "微软雅黑", sans-serif;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+        }
+        button {
+            padding: 6px 12px;
+            cursor: pointer;
+            border: none;
+            border-radius: 4px;
+            transition: background 0.3s;
+            font-family: "微软雅黑", sans-serif;
+        }
+        #addPoint { background: #4CAF50; color: white; }
+        #addPoint:hover { background: #45a049; }
+        #buildTree { background: #2196F3; color: white; }
+        #buildTree:hover { background: #0b7dda; }
+        #search { background: #FF9800; color: white; }
+        #search:hover { background: #e68a00; }
+        #clear { background: #f44336; color: white; }
+        #clear:hover { background: #d32f2f; }
+        #canvas {
+            border: 1px solid #ccc;
+            background: #f9f9f9;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        .status {
+            color: #333;
+            font-size: 14px;
+            font-family: "微软雅黑", sans-serif;
+            font-weight: 500;
+            height: 20px; /* 固定高度避免布局跳动 */
+        }
+        .legend {
+            display: flex;
+            gap: 15px;
+            font-size: 12px;
+            margin-top: 10px;
+            font-family: "微软雅黑", sans-serif;
+            flex-wrap: wrap;
+            justify-content: center;
+        }
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .color-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+            border: 1px solid #ccc;
+        }
+        h3 {
+            font-family: "微软雅黑", sans-serif;
+            color: #333;
+            margin: 0;
+        }
+        .speed-control {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-top: 5px;
+        }
+        .speed-control label {
+            font-size: 13px;
+            color: #555;
+        }
+        #speedSlider {
+            width: 120px;
+        }
+        .speed-value {
+            font-size: 12px;
+            color: #666;
+        }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h3>KD树构造与最近邻搜索可视化</h3>
+    <div class="controls">
+        <div class="input-group">
+            <label>X：</label>
+            <input type="number" id="xInput" step="0.1" value="2" min="0" max="10">
+            <label>Y：</label>
+            <input type="number" id="yInput" step="0.1" value="3" min="0" max="10">
+            <button id="addPoint">添加点</button>
+        </div>
+        <button id="buildTree">构建树</button>
+        <div class="input-group">
+            <label>搜索X：</label>
+            <input type="number" id="searchX" step="0.1" value="3" min="0" max="10">
+            <label>Y：</label>
+            <input type="number" id="searchY" step="0.1" value="4.5" min="0" max="10">
+            <button id="search">开始搜索</button>
+        </div>
+        <button id="clear">清空全部</button>
+        <div class="speed-control">
+            <label>动画速度：</label>
+            <input type="range" id="speedSlider" min="500" max="3000" step="100" value="1000">
+            <span class="speed-value" id="speedValue">1.0秒/步</span>
+        </div>
+    </div>
+    <div class="status" id="status">添加点后点击“构建树”开始（建议添加3-8个点）</div>
+    <canvas id="canvas" width="900" height="600"></canvas>
+    <div class="legend">
+        <div class="legend-item">
+            <div class="color-box" style="background: red;"></div>
+            <span>正在构建的节点</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: #4CAF50;"></div>
+            <span>未搜索的节点</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: orange;"></div>
+            <span>正在搜索的节点</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: rgba(255,165,0,0.5);"></div>
+            <span>已搜索完成的节点</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: blue;"></div>
+            <span>目标点</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: purple;"></div>
+            <span>最终最近邻</span>
+        </div>
+        <div class="legend-item">
+            <div class="color-box" style="background: #999;"></div>
+            <span>树连线</span>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 节点类：存储KD树节点核心信息
+    class Node {
+        constructor(axis, value, point, depth) {
+            this.axis = axis;          // 分割维度（0=x轴，1=y轴）
+            this.value = value;        // 分割值（当前维度坐标）
+            this.point = point;        // 节点坐标 [x, y]
+            this.depth = depth;        // 节点深度
+            this.left = null;          // 左子节点（<分割值）
+            this.right = null;         // 右子节点（≥分割值）
+            this.parent = null;        // 父节点
+            this.pos = { x: 0, y: 0 }; // 画布像素坐标
+        }
+    }
+
+    // KD树可视化核心类（搜索不清除画布版）
+    class KDTreeVisualizer {
+        constructor(canvasId) {
+            // 画布基础配置
+            this.canvas = document.getElementById(canvasId);
+            this.ctx = this.canvas.getContext('2d');
+            this.canvasWidth = this.canvas.width;
+            this.canvasHeight = this.canvas.height;
+
+            // 数据存储
+            this.points = [];          // 用户输入的原始点集（去重后）
+            this.root = null;          // KD树根节点
+            this.buildOrder = [];      // 节点构建顺序（动画用）
+            this.nodeMap = new Map();  // 坐标→节点映射（去重）
+            this.nodePositions = new Map(); // 节点→画布坐标映射（缓存）
+
+            // 动画状态
+            this.animating = false;    // 是否正在动画
+            this.buildStep = 0;        // 构建动画进度（已构建节点数）
+            this.searchStep = 0;       // 搜索动画进度（已搜索节点数）
+            this.searchPath = [];      // 搜索路径（严格按算法流程）
+            this.targetPoint = null;   // 搜索目标点
+            this.nearestNeighbor = null;// 最近邻节点
+            this.timerId = null;       // 定时器ID（单例，避免叠加）
+            this.animationDelay = 1000;// 动画步长延迟（默认1秒）
+
+            // 画布布局配置（动态适配节点数量）
+            this.margin = 60;
+            this.maxDepth = 0;         // 树的最大深度（用于动态调整间距）
+            this.horizonBase = 150;    // 基础横向间距
+            this.verticalStep = 90;    // 纵向层级间距（固定）
+        }
+
+        // 设置动画速度（外部滑块控制）
+        setAnimationDelay(delay) {
+            this.animationDelay = Math.max(500, Math.min(3000, delay));
+        }
+
+        // 添加点（去重+输入验证）
+        addPoint(x, y) {
+            if (this.animating) {
+                this.updateStatus("⚠️ 动画进行中，暂不能添加点");
+                return false;
+            }
+
+            // 输入验证（0-10之间的有效数字）
+            const xNum = parseFloat(x);
+            const yNum = parseFloat(y);
+            if (isNaN(xNum) || isNaN(yNum) || xNum < 0 || xNum > 10 || yNum < 0 || yNum > 10) {
+                this.updateStatus("⚠️ 请输入0-10之间的有效数字");
+                return false;
+            }
+
+            // 去重（精确到1位小数，避免浮点误差）
+            const pointKey = `${xNum.toFixed(1)},${yNum.toFixed(1)}`;
+            if (this.nodeMap.has(pointKey)) {
+                this.updateStatus(`⚠️ 点(${xNum.toFixed(1)},${yNum.toFixed(1)})已存在`);
+                return false;
+            }
+
+            // 合法点：添加到集合
+            const newPoint = [xNum, yNum];
+            this.points.push(newPoint);
+            this.nodeMap.set(pointKey, newPoint);
+            this.updateStatus(`✅ 已添加点(${xNum.toFixed(1)},${yNum.toFixed(1)}) - 总点数：${this.points.length}`);
+            return true;
+        }
+
+        // 构建KD树（保留画布，仅更新构建状态）
+        buildTree() {
+            if (this.animating || this.points.length === 0) {
+                this.updateStatus(this.points.length === 0 ? "⚠️ 请先添加3-8个点" : "⚠️ 动画进行中，暂不能构建");
+                return;
+            }
+
+            // 重置构建状态（不清空画布，保留历史构建结果）
+            this.clearAnimation(false);
+            this.root = null;
+            this.buildOrder = [];
+            this.nodePositions.clear();
+
+            // 构建KD树+计算节点坐标
+            this.root = this._buildRecursive(this.points, 0, null);
+            this.maxDepth = this._getTreeMaxDepth(this.root);
+            this._calculateNodePositions(this.root);
+
+            // 启动构建动画（逐节点绘制，不清除之前内容）
+            this.buildStep = 0;
+            this.animating = true;
+            this.updateStatus("🔨 正在构建KD树...（红色=正在构建，绿色=已构建）");
+            this._animateBuild();
+            return true;
+        }
+
+        // 递归构建KD树（私有方法）
+        _buildRecursive(points, depth, parentNode) {
+            if (points.length === 0) return null;
+
+            const k = 2;
+            const axis = depth % k;
+            // 稳定排序（避免相同值乱序）
+            const sortedPoints = [...points].sort((a, b) => {
+                if (a[axis] !== b[axis]) return a[axis] - b[axis];
+                return a[(axis + 1) % k] - b[(axis + 1) % k];
+            });
+
+            // 取中位数节点
+            const medianIdx = Math.floor(sortedPoints.length / 2);
+            const medianPoint = sortedPoints[medianIdx];
+            const node = new Node(axis, medianPoint[axis], medianPoint, depth);
+            node.parent = parentNode;
+            this.buildOrder.push(node);
+
+            // 递归构建左右子树
+            node.left = this._buildRecursive(sortedPoints.slice(0, medianIdx), depth + 1, node);
+            node.right = this._buildRecursive(sortedPoints.slice(medianIdx + 1), depth + 1, node);
+
+            return node;
+        }
+
+        // 获取树的最大深度（私有方法）
+        _getTreeMaxDepth(node) {
+            if (!node) return 0;
+            const leftDepth = this._getTreeMaxDepth(node.left);
+            const rightDepth = this._getTreeMaxDepth(node.right);
+            return Math.max(leftDepth, rightDepth) + 1;
+        }
+
+        // 计算节点画布坐标（私有方法）
+        _calculateNodePositions(node) {
+            if (!node) return;
+
+            // 根节点位置：居中顶部
+            const rootX = this.canvasWidth / 2;
+            const rootY = this.margin + 40;
+            this.nodePositions.set(node, { x: rootX, y: rootY });
+
+            // BFS遍历：动态横向间距（避免重叠）
+            const queue = [node];
+            while (queue.length > 0) {
+                const currNode = queue.shift();
+                const currPos = this.nodePositions.get(currNode);
+                const level = currNode.depth + 1;
+                const horizonGap = this.horizonBase / Math.pow(2, Math.min(level, this.maxDepth / 2));
+
+                // 左子节点
+                if (currNode.left) {
+                    const leftX = currPos.x - horizonGap;
+                    const leftY = currPos.y + this.verticalStep;
+                    currNode.left.pos = { x: leftX, y: leftY };
+                    this.nodePositions.set(currNode.left, currNode.left.pos);
+                    queue.push(currNode.left);
+                }
+
+                // 右子节点
+                if (currNode.right) {
+                    const rightX = currPos.x + horizonGap;
+                    const rightY = currPos.y + this.verticalStep;
+                    currNode.right.pos = { x: rightX, y: rightY };
+                    this.nodePositions.set(currNode.right, currNode.right.pos);
+                    queue.push(currNode.right);
+                }
+            }
+        }
+
+        // 开始最近邻搜索（核心：不清除画布，颜色动态叠加）
+        startSearch(targetX, targetY) {
+            if (this.animating || !this.root) {
+                this.updateStatus(!this.root ? "⚠️ 请先构建KD树" : "⚠️ 动画进行中，暂不能搜索");
+                return;
+            }
+
+            // 输入验证
+            const tx = parseFloat(targetX);
+            const ty = parseFloat(targetY);
+            if (isNaN(tx) || isNaN(ty) || tx < 0 || tx > 10 || ty < 0 || ty > 10) {
+                this.updateStatus("⚠️ 请输入0-10之间的有效搜索坐标");
+                return;
+            }
+
+            // 重置搜索状态（关键：不清空画布，保留构建阶段的节点和连线）
+            this.clearAnimation(false);
+            this.targetPoint = [tx, ty];
+            this.searchPath = [];
+            this.nearestNeighbor = null;
+            let minDist = Infinity;
+
+            // 1. 先绘制目标点（只画一次，不重复清除）
+            this._drawTargetPoint();
+            // 2. 递归搜索（记录路径）
+            this._searchRecursive(this.root, tx, ty, minDist);
+            this.searchPath = [...new Set(this.searchPath)]; // 去重路径
+
+            // 3. 启动搜索动画（颜色动态更新搜索路径节点）
+            this.searchStep = 0;
+            this.animating = true;
+            this.updateStatus(`🔍 正在搜索目标点(${tx.toFixed(1)},${ty.toFixed(1)})...（橙色=正在搜，浅橙=已搜完）`);
+            this._animateSearch();
+        }
+
+        // 递归搜索（私有方法：严格按KD树算法记录路径）
+        _searchRecursive(node, tx, ty, minDist) {
+            if (!node) return minDist;
+
+            // 1. 记录当前节点到搜索路径（算法流程第一步）
+            this.searchPath.push(node);
+
+            // 2. 计算当前节点到目标点的距离
+            const dx = node.point[0] - tx;
+            const dy = node.point[1] - ty;
+            const currDist = Math.sqrt(dx * dx + dy * dy);
+
+            // 3. 更新最近邻
+            if (currDist < minDist) {
+                minDist = currDist;
+                this.nearestNeighbor = node;
+            }
+
+            // 4. 决定优先搜索的子树
+            const axis = node.axis;
+            const isLeftPriority = axis === 0 ? (tx < node.value) : (ty < node.value);
+            const priorityChild = isLeftPriority ? node.left : node.right;
+            const otherChild = isLeftPriority ? node.right : node.left;
+
+            // 5. 先搜优先子树，再回溯检查另一子树
+            minDist = this._searchRecursive(priorityChild, tx, ty, minDist);
+            if (Math.abs(axis === 0 ? tx - node.value : ty - node.value) < minDist) {
+                minDist = this._searchRecursive(otherChild, tx, ty, minDist);
+            }
+
+            return minDist;
+        }
+
+        // 构建动画（逐节点绘制，不清除画布）
+        _animateBuild() {
+            if (this.buildStep >= this.buildOrder.length) {
+                this.animating = false;
+                this.updateStatus(`✅ KD树构建完成！共${this.buildOrder.length}个节点（绿色=未搜索）`);
+                return;
+            }
+
+            // 1. 绘制当前构建的节点（红色）
+            const currNode = this.buildOrder[this.buildStep];
+            const currPos = this.nodePositions.get(currNode);
+            if (currPos) {
+                // 绘制节点（红色=正在构建）
+                this.ctx.beginPath();
+                this.ctx.arc(currPos.x, currPos.y, 16, 0, Math.PI * 2);
+                this.ctx.fillStyle = "red";
+                this.ctx.strokeStyle = "#C62828";
+                this.ctx.lineWidth = 1.5;
+                this.ctx.fill();
+                this.ctx.stroke();
+
+                // 绘制节点坐标（白色文字）
+                this.ctx.fillStyle = "white";
+                this.ctx.font = "12px 微软雅黑";
+                this.ctx.textAlign = "center";
+                this.ctx.textBaseline = "middle";
+                const pointText = `(${currNode.point[0].toFixed(1)},${currNode.point[1].toFixed(1)})`;
+                this.ctx.fillText(pointText, currPos.x, currPos.y);
+
+                // 绘制与父节点的连线（灰色，只画一次）
+                if (currNode.parent) {
+                    const parentPos = this.nodePositions.get(currNode.parent);
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(parentPos.x, parentPos.y);
+                    this.ctx.lineTo(currPos.x, currPos.y);
+                    this.ctx.strokeStyle = "#999";
+                    this.ctx.lineWidth = 1.2;
+                    this.ctx.stroke();
+                }
+
+                // 2. 将上一个节点设为“已构建”（绿色，覆盖红色）
+                if (this.buildStep > 0) {
+                    const prevNode = this.buildOrder[this.buildStep - 1];
+                    const prevPos = this.nodePositions.get(prevNode);
+                    this.ctx.beginPath();
+                    this.ctx.arc(prevPos.x, prevPos.y, 14, 0, Math.PI * 2);
+                    this.ctx.fillStyle = "#4CAF50";
+                    this.ctx.strokeStyle = "#388E3C";
+                    this.ctx.lineWidth = 1.5;
+                    this.ctx.fill();
+                    this.ctx.stroke();
+
+                    // 重绘上一个节点的坐标（黑色文字）
+                    this.ctx.fillStyle = "black";
+                    this.ctx.fillText(`(${prevNode.point[0].toFixed(1)},${prevNode.point[1].toFixed(1)})`, prevPos.x, prevPos.y);
+                }
+            }
+
+            // 推进进度
+            this.buildStep++;
+            if (this.timerId) clearTimeout(this.timerId);
+            this.timerId = setTimeout(() => {
+                this._animateBuild();
+            }, this.animationDelay);
+        }
+
+        // 搜索动画（核心：颜色动态叠加，不清除画布）
+        _animateSearch() {
+            if (this.searchStep >= this.searchPath.length) {
+                this.animating = false;
+                // 1. 高亮最近邻（紫色覆盖，突出结果）
+                const nn = this.nearestNeighbor;
+                const nnPos = this.nodePositions.get(nn);
+                this.ctx.beginPath();
+                this.ctx.arc(nnPos.x, nnPos.y, 18, 0, Math.PI * 2);
+                this.ctx.fillStyle = "purple";
+                this.ctx.strokeStyle = "#6A1B9A";
+                this.ctx.lineWidth = 2;
+                this.ctx.fill();
+                this.ctx.stroke();
+
+                // 绘制最近邻标签（白色文字）
+                this.ctx.fillStyle = "white";
+                this.ctx.font = "12px 微软雅黑";
+                this.ctx.textAlign = "center";
+                this.ctx.textBaseline = "middle";
+                const nnText = `最近邻\n(${nn.point[0].toFixed(1)},${nn.point[1].toFixed(1)})`;
+                this.ctx.fillText(nnText, nnPos.x, nnPos.y);
+
+                // 2. 绘制目标点到最近邻的虚线（紫色，标记关联）
+                const targetPos = { x: this.margin + 50, y: this.canvasHeight - this.margin - 50 };
+                this.ctx.beginPath();
+                this.ctx.moveTo(targetPos.x, targetPos.y);
+                this.ctx.lineTo(nnPos.x, nnPos.y);
+                this.ctx.strokeStyle = "purple";
+                this.ctx.lineWidth = 1.5;
+                this.ctx.setLineDash([5, 3]);
+                this.ctx.stroke();
+                this.ctx.setLineDash([]);
+
+                // 3. 更新状态提示
+                const dist = Math.sqrt(Math.pow(nn.point[0] - this.targetPoint[0], 2) + Math.pow(nn.point[1] - this.targetPoint[1], 2));
+                this.updateStatus(`✅ 搜索完成！最近邻：(${nn.point[0].toFixed(1)},${nn.point[1].toFixed(1)})，距离：${dist.toFixed(2)}`);
+                return;
+            }
+
+            // 1. 处理“已搜索完成”的节点（浅橙色覆盖绿色/橙色）
+            if (this.searchStep > 0) {
+                const prevNode = this.searchPath[this.searchStep - 1];
+                const prevPos = this.nodePositions.get(prevNode);
+                this.ctx.beginPath();
+                this.ctx.arc(prevPos.x, prevPos.y, 14, 0, Math.PI * 2);
+                this.ctx.fillStyle = "rgba(255,165,0,0.5)"; // 浅橙色=已搜完
+                this.ctx.strokeStyle = "rgba(255,140,0,0.7)";
+                this.ctx.lineWidth = 1.5;
+                this.ctx.fill();
+                this.ctx.stroke();
+
+                // 重绘坐标（黑色文字）
+                this.ctx.fillStyle = "black";
+                this.ctx.font = "12px 微软雅黑";
+                this.ctx.textAlign = "center";
+                this.ctx.textBaseline = "middle";
+                const prevText = `(${prevNode.point[0].toFixed(1)},${prevNode.point[1].toFixed(1)})`;
+                this.ctx.fillText(prevText, prevPos.x, prevPos.y);
+            }
+
+            // 2. 处理“正在搜索”的节点（橙色覆盖绿色）
+            const currNode = this.searchPath[this.searchStep];
+            const currPos = this.nodePositions.get(currNode);
+            this.ctx.beginPath();
+            this.ctx.arc(currPos.x, currPos.y, 16, 0, Math.PI * 2);
+            this.ctx.fillStyle = "orange"; // 橙色=正在搜
+            this.ctx.strokeStyle = "#E65100";
+            this.ctx.lineWidth = 1.5;
+            this.ctx.fill();
+            this.ctx.stroke();
+
+            // 重绘坐标（白色文字）
+            this.ctx.fillStyle = "white";
+            this.ctx.fillText(`(${currNode.point[0].toFixed(1)},${currNode.point[1].toFixed(1)})`, currPos.x, currPos.y);
+
+            // 推进进度
+            this.searchStep++;
+            if (this.timerId) clearTimeout(this.timerId);
+            this.timerId = setTimeout(() => {
+                this._animateSearch();
+            }, this.animationDelay);
+        }
+
+        // 绘制目标点（只画一次，不重复清除）
+        _drawTargetPoint() {
+            if (!this.targetPoint) return;
+
+            // 目标点位置：左下角（远离树结构，避免重叠）
+            const targetPos = {
+                x: this.margin + 50,
+                y: this.canvasHeight - this.margin - 50
+            };
+
+            // 绘制目标点（蓝色，只画一次）
+            this.ctx.beginPath();
+            this.ctx.arc(targetPos.x, targetPos.y, 14, 0, Math.PI * 2);
+            this.ctx.fillStyle = "blue";
+            this.ctx.strokeStyle = "#1565C0";
+            this.ctx.lineWidth = 1.5;
+            this.ctx.fill();
+            this.ctx.stroke();
+
+            // 绘制目标点标签（白色文字）
+            this.ctx.fillStyle = "white";
+            this.ctx.font = "12px 微软雅黑";
+            this.ctx.textAlign = "center";
+            this.ctx.textBaseline = "middle";
+            const targetText = `目标\n(${this.targetPoint[0].toFixed(1)},${this.targetPoint[1].toFixed(1)})`;
+            this.ctx.fillText(targetText, targetPos.x, targetPos.y);
+        }
+
+        // 清除动画状态（关键：默认不清空画布）
+        clearAnimation(clearCanvas = false) {
+            if (this.timerId) clearTimeout(this.timerId);
+            this.animating = false;
+            this.buildStep = 0;
+            this.searchStep = 0;
+            this.searchPath = [];
+            this.targetPoint = null;
+            this.nearestNeighbor = null;
+
+            // 仅在“清空全部”时才清空画布
+            if (clearCanvas) {
+                this.ctx.clearRect(0, 0, this.canvasWidth, this.canvasHeight);
+            }
+        }
+
+        // 清空全部数据（重置所有状态，清空画布）
+        clearAll() {
+            this.clearAnimation(true); // 清空画布
+            this.points = [];
+            this.root = null;
+            this.buildOrder = [];
+            this.nodeMap.clear();
+            this.nodePositions.clear();
+            this.maxDepth = 0;
+            this.updateStatus("🗑️ 已清空所有数据，请添加3-8个点重新开始");
+
+            // 重置输入框
+            document.getElementById('xInput').value = 2;
+            document.getElementById('yInput').value = 3;
+            document.getElementById('searchX').value = 3;
+            document.getElementById('searchY').value = 4.5;
+        }
+
+        // 更新状态提示
+        updateStatus(text) {
+            document.getElementById('status').textContent = text;
+        }
+    }
+
+    // 页面加载完成后初始化（避免DOM未就绪）
+    window.addEventListener('load', () => {
+        const visualizer = new KDTreeVisualizer('canvas');
+
+        // 1. 绑定“添加点”按钮
+        document.getElementById('addPoint').addEventListener('click', () => {
+            const x = document.getElementById('xInput').value;
+            const y = document.getElementById('yInput').value;
+            visualizer.addPoint(x, y);
+        });
+
+        // 2. 绑定“构建树”按钮
+        document.getElementById('buildTree').addEventListener('click', () => {
+            visualizer.buildTree();
+        });
+
+        // 3. 绑定“开始搜索”按钮
+        document.getElementById('search').addEventListener('click', () => {
+            const x = document.getElementById('searchX').value;
+            const y = document.getElementById('searchY').value;
+            visualizer.startSearch(x, y);
+        });
+
+        // 4. 绑定“清空全部”按钮
+        document.getElementById('clear').addEventListener('click', () => {
+            visualizer.clearAll();
+        });
+
+        // 5. 绑定“速度滑块”事件
+        const speedSlider = document.getElementById('speedSlider');
+        const speedValue = document.getElementById('speedValue');
+        speedSlider.addEventListener('input', (e) => {
+            const delay = parseInt(e.target.value);
+            visualizer.setAnimationDelay(delay);
+            speedValue.textContent = `${(delay / 1000).toFixed(1)}秒/步`;
+        });
+
+        // 6. 绑定“Enter键”触发
+        ['xInput', 'yInput'].forEach(id => {
+            document.getElementById(id).addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') document.getElementById('addPoint').click();
+            });
+        });
+        ['searchX', 'searchY'].forEach(id => {
+            document.getElementById(id).addEventListener('keypress', (e) => {
+                if (e.key === 'Enter') document.getElementById('search').click();
+            });
+        });
+    });
+</script>
+</body>
+</html>
+
